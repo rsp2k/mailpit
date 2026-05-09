@@ -149,6 +149,11 @@ func init() {
 	rootCmd.Flags().StringVar(&config.POP3TLSCert, "pop3-tls-cert", config.POP3TLSCert, "Optional TLS certificate for POP3 server - requires pop3-tls-key")
 	rootCmd.Flags().StringVar(&config.POP3TLSKey, "pop3-tls-key", config.POP3TLSKey, "Optional TLS key for POP3 server - requires pop3-tls-cert")
 
+	// IMAP server (basic, INBOX-only, IDLE-enabled). Auth shares POP3 credentials.
+	rootCmd.Flags().StringVar(&config.IMAPListen, "imap", config.IMAPListen, "IMAP server bind interface and port (requires pop3-auth-file)")
+	rootCmd.Flags().StringVar(&config.IMAPTLSCert, "imap-tls-cert", config.IMAPTLSCert, "Optional TLS certificate for IMAP server - requires imap-tls-key")
+	rootCmd.Flags().StringVar(&config.IMAPTLSKey, "imap-tls-key", config.IMAPTLSKey, "Optional TLS key for IMAP server - requires imap-tls-cert")
+
 	// Tagging
 	rootCmd.Flags().StringVarP(&config.CLITagsArg, "tag", "t", config.CLITagsArg, "Tag new messages matching filters")
 	rootCmd.Flags().StringVar(&config.TagsConfig, "tags-config", config.TagsConfig, "Load tags filters from yaml configuration file")
@@ -375,6 +380,13 @@ func initConfigFromEnv() {
 	}
 	config.POP3TLSCert = os.Getenv("MP_POP3_TLS_CERT")
 	config.POP3TLSKey = os.Getenv("MP_POP3_TLS_KEY")
+
+	// IMAP server (auth shares POP3 credentials)
+	if len(os.Getenv("MP_IMAP_BIND_ADDR")) > 0 {
+		config.IMAPListen = os.Getenv("MP_IMAP_BIND_ADDR")
+	}
+	config.IMAPTLSCert = os.Getenv("MP_IMAP_TLS_CERT")
+	config.IMAPTLSKey = os.Getenv("MP_IMAP_TLS_KEY")
 
 	// Tagging
 	config.CLITagsArg = os.Getenv("MP_TAG")

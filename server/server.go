@@ -18,6 +18,7 @@ import (
 
 	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/auth"
+	"github.com/axllent/mailpit/internal/imap"
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/pop3"
 	"github.com/axllent/mailpit/internal/prometheus"
@@ -59,6 +60,8 @@ func Listen() {
 	go websockets.MessageHub.Run()
 
 	go pop3.Run()
+
+	go imap.Run()
 
 	r := apiRoutes()
 

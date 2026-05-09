@@ -204,6 +204,16 @@ var (
 	// POP3TLSKey TLS certificate key
 	POP3TLSKey string
 
+	// IMAPListen address - if set then Mailpit will start the IMAP server and listen on this address.
+	// IMAP shares POP3's credentials (auth.POP3Credentials) so a single auth file unlocks both.
+	IMAPListen = "[::]:1143"
+
+	// IMAPTLSCert TLS certificate for the IMAP server (optional, mirrors POP3)
+	IMAPTLSCert string
+
+	// IMAPTLSKey TLS certificate key for the IMAP server
+	IMAPTLSKey string
+
 	// EnableSpamAssassin must be either <host>:<port> or "postmark"
 	EnableSpamAssassin string
 
@@ -543,6 +553,36 @@ func VerifyConfig() error {
 
 		if err := auth.SetPOP3Auth(string(b)); err != nil {
 			return err
+		}
+	}
+
+	// IMAP server — same TLS / listen validation pattern as POP3
+	if IMAPTLSCert != "" {
+		if strings.HasPrefix(IMAPTLSCert, "sans:") {
+			IMAPTLSCert = snakeoil.Public(IMAPTLSCert)
+		} else {
+			IMAPTLSCert = filepath.Clean(IMAPTLSCert)
+		}
+		if strings.HasPrefix(IMAPTLSKey, "sans:") {
+			IMAPTLSKey = snakeoil.Private(IMAPTLSKey)
+		} else {
+			IMAPTLSKey = filepath.Clean(IMAPTLSKey)
+		}
+
+		if !isFile(IMAPTLSCert) {
+			return fmt.Errorf("[imap] TLS certificate not found or readable: %s", IMAPTLSCert)
+		}
+		if !isFile(IMAPTLSKey) {
+			return fmt.Errorf("[imap] TLS key not found or readable: %s", IMAPTLSKey)
+		}
+	}
+	if IMAPTLSCert != "" && IMAPTLSKey == "" || IMAPTLSCert == "" && IMAPTLSKey != "" {
+		return errors.New("[imap] you must provide both an IMAP TLS certificate and a key")
+	}
+	if IMAPListen != "" {
+		_, err := net.ResolveTCPAddr("tcp", IMAPListen)
+		if err != nil {
+			return fmt.Errorf("[imap] %s", err.Error())
 		}
 	}
 

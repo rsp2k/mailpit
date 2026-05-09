@@ -39,6 +39,7 @@ including image thumbnails), including optional [HTTPS](https://mailpit.axllent.
 - A [REST API](https://mailpit.axllent.org/docs/api-v1/) for integration testing
 - Real-time web UI updates using web sockets for new mail & optional [browser notifications](https://mailpit.axllent.org/docs/usage/notifications/) when new mail is received
 - Optional [POP3 server](https://mailpit.axllent.org/docs/configuration/pop3/) to download captured message directly into your email client
+- Optional [IMAP server](docs/IMAP.md) with `IDLE` push notifications, single `INBOX` only — connect Thunderbird, K-9, mutt, or any IMAP-aware tool
 - [HTML check](https://mailpit.axllent.org/docs/usage/html-check/) to test & score mail client compatibility with HTML emails
 - [Link check](https://mailpit.axllent.org/docs/usage/link-check/) to test message links (HTML & text) & linked images
 - [Spam check](https://mailpit.axllent.org/docs/usage/spamassassin/) to test message "spamminess" using a running SpamAssassin server
