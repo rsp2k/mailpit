@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/axllent/mailpit/config"
+	"github.com/axllent/mailpit/internal/events"
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/shortuuid"
 	"github.com/axllent/mailpit/internal/tools"
@@ -199,6 +200,7 @@ func Store(body *[]byte, username *string) (string, error) {
 	c.Snippet = snippet
 
 	websockets.Broadcast("new", c)
+	events.Publish("new", c)
 	webhook.Send(c)
 
 	dbLastAction = time.Now()
@@ -812,6 +814,7 @@ func DeleteMessages(ids []string) error {
 		}{ID: id}
 
 		websockets.Broadcast("delete", d)
+		events.Publish("delete", d)
 	}
 
 	return nil
@@ -867,6 +870,7 @@ func DeleteAllMessages() error {
 	BroadcastMailboxStats()
 
 	websockets.Broadcast("truncate", nil)
+	events.Publish("truncate", nil)
 
 	return err
 }
