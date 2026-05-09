@@ -20,7 +20,9 @@ mailbox.
 | Other IMAP flags              | Accepted but not persisted                |
 | `APPEND` (upload via IMAP)    | Yes (LITERAL+ supported)                  |
 | `COPY <set> INBOX`            | Yes (no-op since same mailbox)            |
-| `MOVE`, `COPY` to other dest  | No                                        |
+| `MOVE <set> INBOX`            | Yes (no-op per RFC 6851 §3.3)             |
+| `UID EXPUNGE` (RFC 4315)      | Yes — only expunges UIDs in the given set |
+| `COPY`/`MOVE` to other dest   | No (returns `[TRYCREATE]`)                |
 | `STARTTLS`                    | No — use implicit TLS (see below)         |
 | `SEARCH`                      | `ALL`, `UNSEEN`, `SEEN`, `NEW`, `RECENT`, `UID <set>` |
 | `UIDVALIDITY` persistence     | No — changes every Mailpit restart        |

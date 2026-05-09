@@ -65,7 +65,9 @@ func (s *session) dispatch(line string) bool {
 	case "UID":
 		s.cmdUID(tag, rest)
 	case "EXPUNGE":
-		s.cmdEXPUNGE(tag)
+		s.cmdEXPUNGE(tag, "")
+	case "MOVE":
+		s.cmdMOVE(tag, rest, false)
 	case "CLOSE":
 		s.cmdCLOSE(tag)
 	case "IDLE":
@@ -83,8 +85,6 @@ func (s *session) dispatch(line string) bool {
 		s.cmdAPPEND(tag, rest)
 	case "COPY":
 		s.cmdCOPY(tag, rest, false)
-	case "MOVE":
-		s.taggedNO(tag, "MOVE not supported (Mailpit has a single mailbox)")
 	default:
 		s.taggedBAD(tag, "unknown command")
 	}
@@ -92,7 +92,7 @@ func (s *session) dispatch(line string) bool {
 }
 
 func (s *session) cmdCAPABILITY(tag string) {
-	caps := []string{"IMAP4rev1", "AUTH=PLAIN", "IDLE", "UIDPLUS", "LITERAL+", "ID"}
+	caps := []string{"IMAP4rev1", "AUTH=PLAIN", "IDLE", "UIDPLUS", "MOVE", "LITERAL+", "ID"}
 	s.write("* CAPABILITY " + strings.Join(caps, " "))
 	s.taggedOK(tag, "CAPABILITY completed")
 }
@@ -313,11 +313,11 @@ func (s *session) cmdUID(tag, rest string) {
 	case "SEARCH":
 		s.cmdSEARCH(tag, body, true)
 	case "EXPUNGE":
-		s.cmdEXPUNGE(tag)
+		s.cmdEXPUNGE(tag, body)
 	case "COPY":
 		s.cmdCOPY(tag, body, true)
 	case "MOVE":
-		s.taggedNO(tag, "MOVE not supported (Mailpit has a single mailbox)")
+		s.cmdMOVE(tag, body, true)
 	default:
 		s.taggedBAD(tag, "unknown UID sub-command")
 	}
@@ -444,7 +444,7 @@ func (s *session) fetchItem(m sessionMessage, item string, getRaw func() []byte)
 		return fmt.Sprintf("UID %d", m.uid)
 
 	case upper == "FLAGS":
-		return fmt.Sprintf("FLAGS (%s)", s.flagsList(m.id))
+		return fmt.Sprintf("FLAGS (%s)", s.flagsList(m))
 
 	case upper == "RFC822.SIZE":
 		raw := getRaw()
@@ -935,7 +935,14 @@ func (s *session) cmdSEARCH(tag, rest string, useUID bool) {
 
 // cmdEXPUNGE deletes messages flagged \Deleted, sending one EXPUNGE
 // untagged response per removed message in descending sequence order.
-func (s *session) cmdEXPUNGE(tag string) {
+//
+// When uidSet is non-empty (RFC 4315 UID EXPUNGE), only messages whose
+// UIDs are in the set are expunged. Other \Deleted messages are left
+// alone — this is the difference between IMAP's "expunge everything
+// flagged" and "expunge specifically these UIDs" semantics, and it
+// matters for clients that want to delete a specific message without
+// nuking other deletions queued in the same session.
+func (s *session) cmdEXPUNGE(tag, uidSet string) {
 	if s.state != stateSelected {
 		s.taggedNO(tag, "no mailbox selected")
 		return
@@ -943,6 +950,27 @@ func (s *session) cmdEXPUNGE(tag string) {
 	if s.readOnly {
 		s.taggedNO(tag, "mailbox is read-only")
 		return
+	}
+
+	allowed := map[uint32]struct{}{}
+	useFilter := uidSet != ""
+	if useFilter {
+		var hi uint32
+		for _, m := range s.messages {
+			if m.uid > hi {
+				hi = m.uid
+			}
+		}
+		seqs, err := parseSequenceSet(uidSet, int(hi), true, s.uidToSeq)
+		if err != nil {
+			s.taggedBAD(tag, "bad UID set: "+err.Error())
+			return
+		}
+		for _, seq := range seqs {
+			if seq >= 1 && seq <= len(s.messages) {
+				allowed[s.messages[seq-1].uid] = struct{}{}
+			}
+		}
 	}
 
 	// collect sequences to expunge, descending so seq#s remain valid as
@@ -953,9 +981,15 @@ func (s *session) cmdEXPUNGE(tag string) {
 	}
 	var victims []pair
 	for i, m := range s.messages {
-		if m.deleted {
-			victims = append(victims, pair{seq: i + 1, id: m.id})
+		if !m.deleted {
+			continue
 		}
+		if useFilter {
+			if _, ok := allowed[m.uid]; !ok {
+				continue
+			}
+		}
+		victims = append(victims, pair{seq: i + 1, id: m.id})
 	}
 	sort.Slice(victims, func(i, j int) bool { return victims[i].seq > victims[j].seq })
 
@@ -974,7 +1008,86 @@ func (s *session) cmdEXPUNGE(tag string) {
 			s.messages = append(s.messages[:v.seq-1], s.messages[v.seq:]...)
 		}
 	}
-	s.taggedOK(tag, "EXPUNGE completed")
+	verb := "EXPUNGE"
+	if useFilter {
+		verb = "UID EXPUNGE"
+	}
+	s.taggedOK(tag, verb+" completed")
+}
+
+// cmdMOVE implements RFC 6851 MOVE. Mailpit only has one mailbox so the
+// only legal destination is INBOX, and MOVE INBOX→INBOX is a no-op:
+// per RFC 6851 §3.3 the server "MAY treat the destination as the same
+// as the source mailbox," in which case no COPY actually happens and
+// no EXPUNGE is sent. We still respond with COPYUID listing the source
+// UIDs as both source and destination so the client knows the messages
+// "moved to themselves" successfully.
+//
+// Other destinations return [TRYCREATE] like COPY.
+func (s *session) cmdMOVE(tag, rest string, useUID bool) {
+	if s.state != stateSelected {
+		s.taggedNO(tag, "no mailbox selected")
+		return
+	}
+	if s.readOnly {
+		s.taggedNO(tag, "mailbox is read-only")
+		return
+	}
+	parts := tokenize(rest)
+	if len(parts) < 2 {
+		s.taggedBAD(tag, "MOVE requires set and mailbox")
+		return
+	}
+	setSpec, dest := parts[0], parts[1]
+	if !strings.EqualFold(dest, "INBOX") {
+		s.taggedNO(tag, "[TRYCREATE] no such mailbox")
+		return
+	}
+
+	maxN := len(s.messages)
+	if useUID {
+		var hi uint32
+		for _, m := range s.messages {
+			if m.uid > hi {
+				hi = m.uid
+			}
+		}
+		maxN = int(hi)
+	}
+	seqs, err := parseSequenceSet(setSpec, maxN, useUID, s.uidToSeq)
+	if err != nil {
+		s.taggedBAD(tag, "bad sequence set: "+err.Error())
+		return
+	}
+
+	uids := []uint32{}
+	for _, seq := range seqs {
+		if seq < 1 || seq > len(s.messages) {
+			continue
+		}
+		uids = append(uids, s.messages[seq-1].uid)
+	}
+
+	verb := "MOVE"
+	if useUID {
+		verb = "UID MOVE"
+	}
+	if len(uids) == 0 {
+		s.taggedOK(tag, verb+" completed (no messages)")
+		return
+	}
+
+	uidList := []string{}
+	for _, u := range uids {
+		uidList = append(uidList, strconv.FormatUint(uint64(u), 10))
+	}
+	joined := strings.Join(uidList, ",")
+
+	// Per RFC 6851, COPYUID may be reported in an untagged OK before any
+	// EXPUNGEs (we have none, but the response code form is the same).
+	s.writef("* OK [COPYUID %d %s %s] move within INBOX",
+		uidValidityValue(), joined, joined)
+	s.taggedOK(tag, verb+" completed")
 }
 
 // cmdCOPY handles COPY and UID COPY. With Mailpit's single-mailbox

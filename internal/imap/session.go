@@ -133,11 +133,16 @@ func (s *session) uidToSeq(u uint32) (int, bool) {
 	return 0, false
 }
 
-// flagsList returns the IMAP flags string for a message (e.g. "\Seen").
-func (s *session) flagsList(id string) string {
+// flagsList returns the IMAP flags string for a session message (e.g.
+// "\Seen \Deleted"). Both the persistent \Seen state (read-through to
+// storage.Read) and the per-session \Deleted state contribute.
+func (s *session) flagsList(m sessionMessage) string {
 	parts := []string{}
-	if s.flagsSeen[id] {
+	if s.flagsSeen[m.id] {
 		parts = append(parts, `\Seen`)
+	}
+	if m.deleted {
+		parts = append(parts, `\Deleted`)
 	}
 	return strings.Join(parts, " ")
 }

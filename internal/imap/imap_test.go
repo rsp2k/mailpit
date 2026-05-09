@@ -136,9 +136,46 @@ func TestIMAP(t *testing.T) {
 	_, _ = fmt.Fprint(c.conn, "\r\n")
 	expectContains(t, c, "p OK")
 
-	// MOVE is intentionally not supported — server returns NO
+	// MOVE INBOX→INBOX is a no-op; RFC 6851 says we still respond with
+	// COPYUID listing the source UIDs as both source and destination.
 	send(c, "q MOVE 1 INBOX")
-	expectContains(t, c, "q NO")
+	expectContains(t, c, "[COPYUID")
+	expectContains(t, c, "q OK")
+
+	// MOVE to a non-existent mailbox returns [TRYCREATE] NO
+	send(c, "r MOVE 1 OtherFolder")
+	expectContains(t, c, "TRYCREATE")
+
+	// UID EXPUNGE selectivity (RFC 4315): mark two messages \Deleted,
+	// then UID EXPUNGE only one of them — the other must remain.
+	send(c, "s UID FETCH 1:* (UID)")
+	uidLines := readForDuration(t, c, 1*time.Second)
+	if !strings.Contains(uidLines, "UID ") {
+		t.Fatalf("expected UID list, got: %q", uidLines)
+	}
+
+	// Pick two surviving sequence numbers and mark them \Deleted
+	send(c, `t STORE 1,2 +FLAGS (\Deleted)`)
+	for i := 0; i < 4; i++ {
+		l := readLine(t, c)
+		if strings.HasPrefix(l, "t ") {
+			break
+		}
+	}
+
+	// UID EXPUNGE with a no-match UID set must leave \Deleted messages
+	// alone. We expect zero untagged "* N EXPUNGE" lines and a tagged OK.
+	send(c, "u UID EXPUNGE 999999")
+	uidExpungeOut := readForDuration(t, c, 1*time.Second)
+	for _, l := range strings.Split(uidExpungeOut, "\n") {
+		l = strings.TrimRight(l, "\r")
+		if strings.HasPrefix(l, "* ") && strings.HasSuffix(l, " EXPUNGE") {
+			t.Fatalf("UID EXPUNGE 999999 expunged something it shouldn't: %q", l)
+		}
+	}
+	if !strings.Contains(uidExpungeOut, "u OK") {
+		t.Fatalf("expected u OK, got: %q", uidExpungeOut)
+	}
 
 	// LOGOUT
 	send(c, "z LOGOUT")
